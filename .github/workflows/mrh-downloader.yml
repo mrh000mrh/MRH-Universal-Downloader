@@ -1,74 +1,79 @@
-name: تست دانلودر یوتیوب MRH
+name: MRH Ultimate Downloader
 
 on:
   push:
-    branches: [ feature/youtube-test ] # <-- این برنچ، محل امن تست شماست!
+    branches: [ main ]
   workflow_dispatch:
 
 permissions:
   contents: write
 
 jobs:
-  download-youtube:
+  download:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
     steps:
+      # 1. کلون کردن ریپو
       - uses: actions/checkout@v4
 
-      # نصب و تنظیمات پیش‌فرض yt-dlp، aria2 و FFmpeg (ابزارهای ضروری)
-      - uses: AnimMouse/setup-yt-dlp@v3
-        with:
-          aria2: true          # فعال کردن دانلود چندبخشی aria2 برای سرعت بیشتر
-          ejs-node: true       # فعال کردن پردازش چالش الگوهای جاوااسکریپت یوتیوب
+      # 2. راه‌اندازی محیط برای یوتیوب و اینستاگرام (بهترین روش موجود)
+      - name: Setup yt-dlp
+        uses: AnimMouse/setup-yt-dlp@v3
 
-      - name: دریافت آخرین پیام کامیت
-        id: msg
+      # 3. دریافت دستور
+      - name: Get Command
+        id: cmd
         run: |
           MSG=$(git log -1 --pretty=%B)
-          echo "full=$MSG" >> $GITHUB_OUTPUT
+          echo "message=$MSG" >> $GITHUB_OUTPUT
 
-      - name: دانلود از یوتیوب
-        if: contains(steps.msg.outputs.full, 'dl-yt:')
+      # 4. دانلود خودکار (smrt!)
+      - name: Smart Download
         run: |
-          # ۱. استخراج آدرس ویدیو از پیام کامیت
-          URL=$(echo "${{ steps.msg.outputs.full }}" | grep -oP 'dl-yt:\s*\Khttps?://[^\s]+' | head -1)
-          URL=$(echo "${{ steps.msg.outputs.full }}" | grep -oP 'dl-yt:\s*\Khttps?://[^\s]+')
-          echo "🎬 در حال دانلود از: $URL"
-          
-          mkdir -p downloads/youtube
-          cd downloads/youtube
+          MSG="${{ steps.cmd.outputs.message }}"
+          echo "Full message: $MSG"
 
-          # بررسی می‌کند که آیا کاربر فرمت صوتی (mp3) خواسته است یا خیر
-          if [[ "${{ steps.msg.outputs.full }}" == *"(mp3)"* ]]; then
-            echo "🎵 استخراج و دانلود به صورت MP3..."
-            # دستور دانلود صدا: از دستور yt-dlp با تنظیمات بهینه استفاده می‌کند
-            yt-dlp -x --audio-format mp3 --audio-quality 0 \
-                   --add-header "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" \
-                   --retries 5 --fragment-retries 5 --sleep-requests 2 --sleep-interval 2 \
-                   "$URL"
-          else
-            echo "🎥 دانلود ویدیو با کیفیت حداکثر 720p..."
-            # دستور دانلود ویدیو: بهترین کیفیت ممکن را تا 720p انتخاب می‌کند
-            yt-dlp -f "bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[height<=720]" \
-                   --merge-output-format mp4 \
-                   --add-header "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" \
-                   --retries 5 --fragment-retries 5 --sleep-requests 2 --sleep-interval 2 \
-                   "$URL"
+          # تشخیص دستور یوتیوب
+          if [[ "$MSG" == dl-yt:* ]]; then
+            URL=$(echo "$MSG" | cut -d' ' -f2)
+            echo "Downloading YouTube: $URL"
+            mkdir -p downloads/youtube
+            cd downloads/youtube
+            yt-dlp -f "worst[ext=mp4]" "$URL" || yt-dlp -x --audio-format mp3 "$URL"
+            cd ../..
           fi
-          cd ../..
 
-      # گزارش نهایی: هر فایلی که دانلود شده را لیست می‌کند
-      - name: نمایش فایل‌های دانلود شده
-        run: |
-          echo "=== فایل‌های دریافت شده ==="
-          find downloads -type f -exec ls -lh {} \;
-          echo "========================="
+          # تشخیص دستور اینستاگرام
+          if [[ "$MSG" == dl-ig:* ]]; then
+            URL=$(echo "$MSG" | cut -d' ' -f2)
+            echo "Downloading Instagram: $URL"
+            mkdir -p downloads/instagram
+            cd downloads/instagram
+            yt-dlp "$URL"
+            cd ../..
+          fi
 
-      # ذخیره فایل‌های دانلود شده در مخزن
-      - name: Commit changes
+          # تشخیص لینک مستقیم یا گیت‌هاب
+          if [[ "$MSG" == dl:* ]] || [[ "$MSG" == dl-gh:* ]]; then
+            URL=$(echo "$MSG" | cut -d' ' -f2)
+            FILENAME=$(basename "$URL")
+            echo "Downloading: $FILENAME from $URL"
+            mkdir -p downloads/direct
+            cd downloads/direct
+            curl -L -O --retry 5 "$URL"
+            cd ../..
+          fi
+
+      # 5. نمایش و Commit نهایی
+      - name: Commit Files
         run: |
-          git config user.name "MRH Downloader Bot"
-          git config user.email "mrh-downloader@local"
-          git add downloads/ || true
-          git diff --staged --quiet || git commit -m "[skip ci] افزودن فایل‌های دانلود شده از یوتیوب"
-          git push || true
+          git config user.name "MRH Ultimate Bot"
+          git config user.email "mrh-bot@users.noreply.github.com"
+
+          if [ -d downloads ] && [ "$(ls -A downloads)" ]; then
+            git add downloads/
+            git commit -m "MRH: Add downloaded files [skip ci]"
+            git push
+            echo "✅ Success! Check the 'downloads' folder."
+          else
+            echo "⚠️ No files were downloaded."
+          fi
